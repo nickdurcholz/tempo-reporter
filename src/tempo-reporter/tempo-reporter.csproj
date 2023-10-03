@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <RootNamespace>tempo_reporter</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CliFx" Version="2.3.4" />
+    <PackageReference Include="CsvHelper" Version="30.0.1" />
+    <PackageReference Include="TimeSpanParserUtil" Version="1.2.0" />
+  </ItemGroup>
+
+</Project>
