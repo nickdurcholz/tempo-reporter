@@ -220,7 +220,7 @@ public class ImportCommand : BaseTempoCommand, ICommand
         if (item.ExistingWorklog == null)
             await CreateWorklog(row, worklogDateTime, jiraBaseUri, timeSpentDescription, console);
         else
-            await UpdateWorklog(item, startTime, timeSpentDescription, console);
+            await UpdateWorklog(item, new TimeOnly(worklogDateTime.TimeOfDay.Ticks), timeSpentDescription, console);
     }
 
     private async Task UpdateWorklog(ImportItem item, TimeOnly startTime, string timeSpentDescription, IConsole console)
