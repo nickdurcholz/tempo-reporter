@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using CliFx.Attributes;
 using CliFx.Infrastructure;
 
 namespace tempo_reporter;

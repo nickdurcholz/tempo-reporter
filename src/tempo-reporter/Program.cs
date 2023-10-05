@@ -1,5 +1,3 @@
-﻿global using CliFx;
-global using CliFx.Attributes;
-global using CliFx.Exceptions;
+﻿using CliFx;
 
 return await new CliApplicationBuilder().AddCommandsFromThisAssembly().Build().RunAsync();
