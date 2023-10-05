@@ -54,7 +54,7 @@ public class ImportCommand : BaseTempoCommand, ICommand
         ArgumentException.ThrowIfNullOrEmpty(JiraUser);
 
         var input = OpenInputFile(console);
-        var data = ParseCsv(input);
+        var data = ParseCsv(input, console);
 
         var importList = await MatchImportRowsToExistingWorkItems(console, data, jiraBaseUri);
 
@@ -138,53 +138,67 @@ public class ImportCommand : BaseTempoCommand, ICommand
         return input;
     }
 
-    private static List<CsvRow> ParseCsv(StreamReader input)
+    private static List<CsvRow> ParseCsv(StreamReader input, IConsole console)
     {
         List<CsvRow> data = new();
 
-        using (var csv = new CsvReader(input, CultureInfo.CurrentCulture))
+        using var csv = new CsvReader(input, CultureInfo.CurrentCulture);
+        csv.Context.TypeConverterCache.AddConverter<TimeSpan>(new PermissiveTimeSpanConverter());
+        var readHeaders = true;
+        var hasDescription = false;
+        var isValid = true;
+        while (csv.Read())
         {
-            // Register globally.
-            csv.Context.TypeConverterCache.AddConverter<TimeSpan>(new PermissiveTimeSpanConverter());
-            var readHeaders = true;
-            var hasDescription = false;
-            while (csv.Read())
+            if (readHeaders)
             {
-                if (readHeaders)
+                csv.ReadHeader();
+                readHeaders = false;
+                var headers = csv.HeaderRecord ?? throw new InvalidOperationException("Missing csv headers");
+                hasDescription = headers.Any(h => h.Equals("Description", StringComparison.OrdinalIgnoreCase));
+
+                if (headers.All(h => !string.Equals(h, "Date") && !string.Equals(h, "Time") && !string.Equals(h, "IssueKey")))
                 {
-                    csv.ReadHeader();
-                    readHeaders = false;
-                    var headers = csv.HeaderRecord ?? throw new InvalidOperationException("Missing csv headers");
-                    hasDescription = headers.Any(h => h.Equals("Description", StringComparison.OrdinalIgnoreCase));
-                    continue;
+                    console.Output.WriteLine("Invalid CSV file. Column headers are required and must include Date, Time, and IssueKey.");
+                    break;
                 }
 
-                var date = csv.GetField<string?>("Date");
-                var time = csv.GetField<string?>("Time");
-                var key = csv.GetField<string?>("IssueKey");
-                var desc = hasDescription ? csv.GetField<string?>("Description") : null;
-                if (string.IsNullOrEmpty(date))
-                    throw new CommandException(
-                        "Invalid CSV data. One or more rows is missing the Date column. Expected file to contain the " +
-                        "following columns: Date, Time, IssueKey and may optionally contain a Description column.");
-
-                if (string.IsNullOrEmpty(time))
-                    throw new CommandException(
-                        "Invalid CSV data. One or more rows is missing the Time column. Expected file to contain the " +
-                        "following columns: Date, Time, IssueKey and may optionally contain a Description column.");
-
-                if (string.IsNullOrEmpty(key))
-                    throw new CommandException(
-                        "Invalid CSV data. One or more rows is missing the IssueKey column. Expected file to contain the " +
-                        "following columns: Date, Time, IssueKey and may optionally contain a Description column.");
-
-                if (!DateOnly.TryParse(date, out var dt))
-                    throw new CommandException($"Unsupported date on row {csv.CurrentIndex}: {date}");
-                if (!TimeSpanParser.TryParse(time, out var t))
-                    throw new CommandException($"Unsupported time on row {csv.CurrentIndex}: {time}");
-                data.Add(new CsvRow {Date = dt, Time = t, IssueKey = key, Description = desc});
+                continue;
             }
+
+            var date = csv.GetField<string?>("Date");
+            var time = csv.GetField<string?>("Time");
+            var key = csv.GetField<string?>("IssueKey");
+            var desc = hasDescription ? csv.GetField<string?>("Description") : null;
+            if (!DateOnly.TryParse(date, out var dt))
+            {
+                console.Output.WriteLine($"Invalid or missing Date on row {csv.CurrentIndex}: '{date}'");
+                isValid = false;
+            }
+
+            if (!TimeSpanParser.TryParse(time, out var t))
+            {
+                if (double.TryParse(time, out var d))
+                {
+                    t = TimeSpan.FromSeconds(d);
+                }
+                else
+                {
+                    console.Output.WriteLine($"Invalid or missing Time on row {csv.CurrentIndex}: '{time}'");
+                    isValid = false;
+                }
+            }
+
+            if (string.IsNullOrEmpty(key))
+            {
+                console.Output.WriteLine($"Missing IssueKey on row {csv.CurrentIndex}");
+                isValid = false;
+            }
+
+            data.Add(new CsvRow {Date = dt, Time = t, IssueKey = key, Description = desc});
         }
+
+        if (!isValid)
+            throw new CommandException("Please fix CSV data and retry the command");
 
         return data;
     }
