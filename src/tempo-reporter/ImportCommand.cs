@@ -191,9 +191,9 @@ public class ImportCommand : ICommand
             : $"{time.Minutes}m";
         console.Output.WriteLine($"Creating worklog for {timeSpent} on {row.Date:yyyy-MM-dd} for issue {row.IssueKey}");
         
-        if (startTimes.TryGetValue(row.Date, out var startTime))
+        if (!startTimes.TryGetValue(row.Date, out var startTime))
             startTime = new TimeOnly(8, 0);
-        startTimes[row.Date] = startTime.Add(time);
+        startTimes[row.Date] = startTime.Add(time).AddMinutes(1);
 
         var worklogDateTime = row.Date.ToDateTime(startTime, DateTimeKind.Local).ToUniversalTime();
         var request = new HttpRequestMessage
