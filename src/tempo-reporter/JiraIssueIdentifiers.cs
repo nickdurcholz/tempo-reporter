@@ -1,0 +1,1 @@
+﻿public readonly record struct JiraIssueIdentifiers(string Key, int Id);

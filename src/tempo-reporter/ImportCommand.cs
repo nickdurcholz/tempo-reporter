@@ -16,6 +16,7 @@ using TimeSpanParserUtil;
 public class ImportCommand : BaseTempoCommand, ICommand
 {
     public static readonly HttpClient Client = new();
+    private JiraClient? _jiraclient;
 
     [CommandOption(
         "file",
@@ -48,27 +49,30 @@ public class ImportCommand : BaseTempoCommand, ICommand
 
     public async ValueTask ExecuteAsync(IConsole console)
     {
-        var jiraBaseUri = new Uri($"https://{JiraDomain}/rest/api/2/");
         ArgumentException.ThrowIfNullOrEmpty(TempoApiToken);
         ArgumentException.ThrowIfNullOrEmpty(JiraApiToken);
         ArgumentException.ThrowIfNullOrEmpty(JiraUser);
+        ArgumentException.ThrowIfNullOrEmpty(JiraDomain);
+
+        _jiraclient = new JiraClient(JiraDomain, JiraUser, JiraApiToken, console);
 
         var input = OpenInputFile(console);
         var data = ParseCsv(input, console);
 
-        var importList = await MatchImportRowsToExistingWorkItems(console, data, jiraBaseUri);
+        var importList = await MatchImportRowsToExistingWorkItems(console, data);
 
         var startTimes = new Dictionary<DateOnly, TimeOnly>();
         foreach (var item in importList) 
-            await ImportCsvRow(item, startTimes, jiraBaseUri, console);
+            await ImportCsvRow(item, startTimes, console);
 
         if (input != console.Input)
             input.Dispose();
     }
 
-    private async Task<List<ImportItem>> MatchImportRowsToExistingWorkItems(IConsole console, List<CsvRow> data, Uri jiraBaseUri)
+    private async Task<List<ImportItem>> MatchImportRowsToExistingWorkItems(IConsole console, List<CsvRow> data)
     {
-        var issueIdMap = await GetIssueIdMap(data, jiraBaseUri);
+        Debug.Assert(_jiraclient != null, nameof(_jiraclient) + " != null");
+        var issueIdMap = await _jiraclient.GetIssueIdMap(data.Select(d => d.IssueKey));
         List<ImportItem> importList = new(data.Count);
         var unmatched = data.ToList();
         await foreach (var worklog in GetWorklogs(data.Select(d => d.Date)))
@@ -93,26 +97,6 @@ public class ImportCommand : BaseTempoCommand, ICommand
             importList.Add(new ImportItem(row, null));
         importList.Sort((a, b) => a.Row.Date.CompareTo(b.Row.Date));
         return importList;
-    }
-
-    private async Task<List<IssueId>> GetIssueIdMap(IEnumerable<CsvRow> rows, Uri jiraBaseUri)
-    {
-        const int pageSize = 500;
-        var keys = rows.Select(r => r.IssueKey).Distinct();
-        var keysJql = $"key in ('{string.Join("', '", keys)}')";
-        var request = MakeJiraRequest(
-            jiraBaseUri,
-            HttpMethod.Get,
-            $"search?maxResults={pageSize}&fields=id,key&jql={UrlEncoder.Default.Encode(keysJql)}");
-        var response = await Client.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<IssueSearchResult>() ??
-                     throw new InvalidOperationException("Jira issue search returned a null response");
-        if (result.Total > pageSize)
-            throw new CommandException($"The jira search returned more than the maximum allowed results: {pageSize}");
-        if (result.Issues == null)
-            throw new CommandException("The jira search returned no issues");
-        return result.Issues.Select(i => new IssueId(i.Key, int.Parse(i.Id))).ToList();
     }
 
     private StreamReader OpenInputFile(IConsole console)
@@ -194,7 +178,8 @@ public class ImportCommand : BaseTempoCommand, ICommand
                 isValid = false;
             }
 
-            data.Add(new CsvRow {Date = dt, Time = t, IssueKey = key, Description = desc});
+            if (isValid)
+                data.Add(new CsvRow {Date = dt, Time = t, IssueKey = key!, Description = desc});
         }
 
         if (!isValid)
@@ -203,11 +188,7 @@ public class ImportCommand : BaseTempoCommand, ICommand
         return data;
     }
 
-    private async Task ImportCsvRow(
-        ImportItem item,
-        Dictionary<DateOnly, TimeOnly> startTimes,
-        Uri jiraBaseUri,
-        IConsole console)
+    private async Task ImportCsvRow(ImportItem item, Dictionary<DateOnly, TimeOnly> startTimes, IConsole console)
     {
         var row = item.Row;
         var timeSpent = row.Time;
@@ -216,9 +197,10 @@ public class ImportCommand : BaseTempoCommand, ICommand
         startTimes[row.Date] = startTime.Add(timeSpent).AddMinutes(1);
         var worklogDateTime = row.Date.ToDateTime(startTime, DateTimeKind.Local).ToUniversalTime();
 
-        var timeSpentDescription = GetHoursMinutesString(timeSpent);
+        var timeSpentDescription = timeSpent.GetHoursMinutesString();
+        Debug.Assert(_jiraclient != null, nameof(_jiraclient) + " != null");
         if (item.ExistingWorklog == null)
-            await CreateWorklog(row, worklogDateTime, jiraBaseUri, timeSpentDescription, console);
+            await _jiraclient.CreateWorklog(row.IssueKey, worklogDateTime, timeSpent, row.Description);
         else
             await UpdateWorklog(item, new TimeOnly(worklogDateTime.TimeOfDay.Ticks), timeSpentDescription, console);
     }
@@ -239,7 +221,7 @@ public class ImportCommand : BaseTempoCommand, ICommand
             return; // nothing to do
         }
 
-        var oldTime = GetHoursMinutesString(TimeSpan.FromSeconds(worklog.TimeSpentSeconds));
+        var oldTime = TimeSpan.FromSeconds(worklog.TimeSpentSeconds).GetHoursMinutesString();
         console.Output.WriteLine($"Updating worklog for issue {row.IssueKey} on {row.Date:yyyy-MM-dd} from {oldTime} to {timeSpentDescription}");
         var request = MakeTempoRequest(HttpMethod.Put, $"worklogs/{worklog.TempoWorklogId}");
         request.Content = JsonContent.Create(new
@@ -254,52 +236,6 @@ public class ImportCommand : BaseTempoCommand, ICommand
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task CreateWorklog(CsvRow row,
-        DateTime worklogDateTime,
-        Uri jiraBaseUri,
-        string timeSpentDescription,
-        IConsole console)
-    {
-        console.Output.WriteLine($"Creating worklog for issue {row.IssueKey} on {row.Date:yyyy-MM-dd} for {timeSpentDescription}");
-
-        var request = MakeJiraRequest(
-            jiraBaseUri,
-            HttpMethod.Post,
-            $"issue/{row.IssueKey}/worklog?adjustEstimate=leave&notifyUsers=true"); 
-        request.Content = JsonContent.Create(new
-        {
-            comment = row.Description ?? $"Working on issue {row.IssueKey}",
-            started = $"{worklogDateTime:yyyy-MM-ddTHH:mm:ss.fff}+0000",
-            timeSpentSeconds = (int) row.Time.TotalSeconds
-        });
-        var response = await Client.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private HttpRequestMessage MakeJiraRequest(Uri jiraBaseUri, HttpMethod method, string relativeUri)
-    {
-        var request = new HttpRequestMessage
-        {
-            Method = method,
-            RequestUri = new Uri(jiraBaseUri, relativeUri),
-            Headers =
-            {
-                Authorization = new AuthenticationHeaderValue(
-                    "Basic",
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes($"{JiraUser}:{JiraApiToken}"))),
-                Accept = {new MediaTypeWithQualityHeaderValue("application/json")}
-            }
-        };
-        return request;
-    }
-
-    private static string GetHoursMinutesString(TimeSpan timeSpent)
-    {
-        return Math.Truncate(timeSpent.TotalHours) > 0.0
-            ? $"{Math.Truncate(timeSpent.TotalHours):0}h {timeSpent.Minutes}m"
-            : $"{timeSpent.Minutes}m";
-    }
-
     private class CsvRow
     {
         public DateOnly Date { get; set; }
@@ -308,6 +244,5 @@ public class ImportCommand : BaseTempoCommand, ICommand
         public string? Description { get; set; }
     }
 
-    private readonly record struct IssueId(string Key, int Id);
     private readonly record struct ImportItem(CsvRow Row, TempoWorklogsResult.WorklogResult? ExistingWorklog);
 }
