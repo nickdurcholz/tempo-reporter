@@ -1,9 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text;
-using System.Text.Encodings.Web;
 using CliFx;
 using CliFx.Attributes;
 using CliFx.Exceptions;
@@ -13,53 +9,20 @@ using tempo_reporter;
 using TimeSpanParserUtil;
 
 [Command("import", Description = "Replaces all tempo worklogs for a given day with data contained in CSV read from stdin.")]
-public class ImportCommand : BaseTempoCommand, ICommand
+public class ImportCommand : BaseJiraCommand, ICommand
 {
-    public static readonly HttpClient Client = new();
-    private JiraClient? _jiraclient;
-
     [CommandOption(
         "file",
         'f',
         Description = "Csv file to import. Defaults to std input")]
     public string? File { get; set; }
 
-    [CommandOption(
-        "jira-token",
-        Description =
-            "Jira api token. See https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#authentication",
-        EnvironmentVariable = "JIRA_TOKEN",
-        IsRequired = true)]
-    public string? JiraApiToken { get; set; }
-
-    [CommandOption(
-        "jira-user",
-        Description =
-            "Jira user name. See https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#authentication",
-        EnvironmentVariable = "JIRA_USER",
-        IsRequired = true)]
-    public string? JiraUser { get; set; }
-
-    [CommandOption(
-        "jira-domain",
-        Description = "Domain name of your jira cloud instance. E.g my-jira.atlassian.net",
-        EnvironmentVariable = "JIRA_DOMAIN",
-        IsRequired = true)]
-    public string? JiraDomain { get; set; }
-
     public async ValueTask ExecuteAsync(IConsole console)
     {
-        ArgumentException.ThrowIfNullOrEmpty(TempoApiToken);
-        ArgumentException.ThrowIfNullOrEmpty(JiraApiToken);
-        ArgumentException.ThrowIfNullOrEmpty(JiraUser);
-        ArgumentException.ThrowIfNullOrEmpty(JiraDomain);
-
-        _jiraclient = new JiraClient(JiraDomain, JiraUser, JiraApiToken, console);
-
         var input = OpenInputFile(console);
         var data = ParseCsv(input, console);
 
-        var importList = await MatchImportRowsToExistingWorkItems(console, data);
+        var importList = await MatchImportRowsToExistingWorkItems(data, console);
 
         var startTimes = new Dictionary<DateOnly, TimeOnly>();
         foreach (var item in importList) 
@@ -69,22 +32,25 @@ public class ImportCommand : BaseTempoCommand, ICommand
             input.Dispose();
     }
 
-    private async Task<List<ImportItem>> MatchImportRowsToExistingWorkItems(IConsole console, List<CsvRow> data)
+    private async Task<List<ImportItem>> MatchImportRowsToExistingWorkItems(List<CsvRow> data, IConsole console)
     {
-        Debug.Assert(_jiraclient != null, nameof(_jiraclient) + " != null");
-        var issueIdMap = await _jiraclient.GetIssueIdMap(data.Select(d => d.IssueKey));
+        Debug.Assert(JiraClient != null, nameof(JiraClient) + " != null");
+        var issueIdMap = await JiraClient.GetIssueIdMap(data.Select(d => d.IssueKey));
         List<ImportItem> importList = new(data.Count);
         var unmatched = data.ToList();
-        await foreach (var worklog in GetWorklogs(data.Select(d => d.Date)))
+        foreach (var worklog in await JiraClient.GetWorklogs(data.Select(d => d.Date)))
         {
-            var key = issueIdMap.FirstOrDefault(m => m.Id == worklog.Issue!.Id).Key;
+            var key = issueIdMap.FirstOrDefault(m => m.Id == worklog.IssueId).Key;
             if (key != null)
             {
                 //find a CsvRow for the same issue on the same day, and say that it matches this worklog
                 //the match makes that row ineligible to match other worklogs
-                var row = unmatched.FirstOrDefault(r => r.IssueKey == key && r.Date == worklog.StartDate);
+                var row = unmatched.FirstOrDefault(r => r.IssueKey == key && r.Date.ToDateTime(default) == worklog.StartDate.Date);
                 if (row == null)
-                    await DeleteWorklog(worklog, console);
+                {
+                    console.Output.WriteLine($"Deleting worklog for {worklog.IssueId} on {worklog.Started:yyyy-MM-dd}");
+                    await JiraClient.DeleteWorklog(worklog);
+                }
                 else
                 {
                     importList.Add(new ImportItem(row, worklog));
@@ -198,14 +164,21 @@ public class ImportCommand : BaseTempoCommand, ICommand
         var worklogDateTime = row.Date.ToDateTime(startTime, DateTimeKind.Local).ToUniversalTime();
 
         var timeSpentDescription = timeSpent.GetHoursMinutesString();
-        Debug.Assert(_jiraclient != null, nameof(_jiraclient) + " != null");
+        Debug.Assert(JiraClient != null, nameof(JiraClient) + " != null");
         if (item.ExistingWorklog == null)
-            await _jiraclient.CreateWorklog(row.IssueKey, worklogDateTime, timeSpent, row.Description);
+        {
+            console.Output.WriteLine(
+                "Creating worklog for issue {0} on {1:yyyy-MM-dd} for {2}",
+                row.IssueKey,
+                worklogDateTime,
+                timeSpent.GetHoursMinutesString());
+            await JiraClient.CreateWorklog(row.IssueKey, worklogDateTime, timeSpent, row.Description);
+        }
         else
-            await UpdateWorklog(item, new TimeOnly(worklogDateTime.TimeOfDay.Ticks), timeSpentDescription, console);
+            await UpdateWorklog(item, worklogDateTime, timeSpentDescription, console);
     }
 
-    private async Task UpdateWorklog(ImportItem item, TimeOnly startTime, string timeSpentDescription, IConsole console)
+    private async Task UpdateWorklog(ImportItem item, DateTime worklogDateTime, string timeSpentDescription, IConsole console)
     {
         var (row, worklog) = item;
         ArgumentNullException.ThrowIfNull(worklog);
@@ -213,9 +186,9 @@ public class ImportCommand : BaseTempoCommand, ICommand
         var description = row.Description ?? $"Working on issue {row.IssueKey}";
         var timeSpentSeconds = (int)row.Time.TotalSeconds;
 
-        if (worklog.Description == description &&
-            worklog.StartDate == row.Date &&
-            worklog.StartTime == startTime &&
+        var started = worklog.StartDate.ToUniversalTime().DateTime;
+        if (worklog.Comment == description &&
+            started == worklogDateTime &&
             worklog.TimeSpentSeconds == timeSpentSeconds)
         {
             return; // nothing to do
@@ -223,17 +196,8 @@ public class ImportCommand : BaseTempoCommand, ICommand
 
         var oldTime = TimeSpan.FromSeconds(worklog.TimeSpentSeconds).GetHoursMinutesString();
         console.Output.WriteLine($"Updating worklog for issue {row.IssueKey} on {row.Date:yyyy-MM-dd} from {oldTime} to {timeSpentDescription}");
-        var request = MakeTempoRequest(HttpMethod.Put, $"worklogs/{worklog.TempoWorklogId}");
-        request.Content = JsonContent.Create(new
-        {
-            authorAccountId = worklog.Author?.AccountId,
-            description = description,
-            startDate = row.Date.ToString("yyyy-MM-dd"),
-            startTime = startTime.ToString("HH:mm:ss"),
-            timeSpentSeconds = timeSpentSeconds,
-        });
-        var response = await Client.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        Debug.Assert(JiraClient != null, nameof(JiraClient) + " != null");
+        await JiraClient.UpdateWorklog(worklog, description, started, timeSpentSeconds);
     }
 
     private class CsvRow
@@ -244,5 +208,5 @@ public class ImportCommand : BaseTempoCommand, ICommand
         public string? Description { get; set; }
     }
 
-    private readonly record struct ImportItem(CsvRow Row, TempoWorklogsResult.WorklogResult? ExistingWorklog);
+    private readonly record struct ImportItem(CsvRow Row, JiraWorklog? ExistingWorklog);
 }
