@@ -11,6 +11,20 @@ The Description column is optional.
 
 When importing this file, the utility will update your tempo timecard to reflect 5h 13m on 10/1 split between PRJ-1234 and PRJ-1235. If there are worklogs for other issues on that day, they will be deleted. If there are worklogs for the two issues in the import file, they will be updated. If the worklogs don't already exist, they will be created.
 
+## Example usage
+
+Import a specific file:
+
+    tempo-reporter import -f time.csv
+
+Import this week's recorded time from ttime:
+
+    ttime report week format=CsvSimple disp=HoursMinutes | ~/Add-IssueKeyColumn.ps1 | tempo-reporter import
+
+Delete all recorded time for a Oct 1, Oct 2, and Oct 5:
+
+    tempo-reporter clear 2023-10-01 2023-10-02 2023-10-05
+
 ## Setup
 
 In order to use this utility you need to generate api keys for both Jira and tempo. See the following pages for instructions.
@@ -28,6 +42,8 @@ While the api tokens and other configuration values can be provided as command l
 |TEMPO_TOKEN|(api token obtained from tempo)|
 
 ## Installation
+
+This application is only distributed as source code
 
 There is a Dockerfile that you can use to package and run the app. It is not published on docker registry.
 
