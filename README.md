@@ -13,6 +13,11 @@ When importing this file, the utility will update your tempo timecard to reflect
 
 ## Example usage
 
+View integrated help:
+
+    tempo-reporter --help
+    tempo-reporter import --help
+
 Import a specific file:
 
     tempo-reporter import -f time.csv
@@ -29,8 +34,8 @@ Delete all recorded time for a Oct 1, Oct 2, and Oct 5:
 
 In order to use this utility you need to generate api keys for both Jira and tempo. See the following pages for instructions.
 
-* https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#authentication
-* https://apidocs.tempo.io/#section/Authentication
+* [Manage API tokens for your Atlassian account](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)
+* [REST API documentation | Authentication](https://apidocs.tempo.io/#section/Authentication)
 
 While the api tokens and other configuration values can be provided as command line arguments when invoking the utility, it is easier and safer to set them as environment variables. You can set the following environment variables in order to use this utility:
 
