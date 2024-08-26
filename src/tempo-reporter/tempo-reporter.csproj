@@ -2,14 +2,15 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>tempo_reporter</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CliFx" Version="2.3.4" />
+    <PackageReference Include="CliFx" Version="2.3.5" />
     <PackageReference Include="CsvHelper" Version="30.0.1" />
     <PackageReference Include="TimeSpanParserUtil" Version="1.2.0" />
   </ItemGroup>

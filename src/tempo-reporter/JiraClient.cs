@@ -2,6 +2,7 @@
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using CliFx.Exceptions;
 using CliFx.Infrastructure;
 
@@ -10,10 +11,10 @@ namespace tempo_reporter;
 public class JiraClient
 {
     private static readonly HttpClient _httpClient = new();
-    private readonly string _userName;
     private readonly string _apiKey;
     private readonly IConsole _console;
     private readonly Uri _jiraBaseUri;
+    private readonly string _userName;
 
     public JiraClient(string jiraDomain, string userName, string apiKey, IConsole console)
     {
@@ -22,7 +23,7 @@ public class JiraClient
         _apiKey = apiKey;
         _console = console;
     }
-    
+
     public async Task<List<JiraIssueIdentifiers>> GetIssueIdMap(IEnumerable<string> keys)
     {
         const int pageSize = 500;
@@ -42,7 +43,8 @@ public class JiraClient
         return result.Issues.Select(i => new JiraIssueIdentifiers(i.Key, int.Parse(i.Id))).ToList();
     }
 
-    public async Task CreateWorklog(string issueKey, DateTime worklogDateTime, TimeSpan timeSpent, string? worklogDescription)
+    public async Task CreateWorklog(string issueKey, DateTime worklogDateTime, TimeSpan timeSpent,
+                                    string? worklogDescription)
     {
         _console.Output.WriteLine(
             "Creating worklog for issue {0} on {1:yyyy-MM-dd} for {2}",
@@ -50,10 +52,8 @@ public class JiraClient
             worklogDateTime,
             timeSpent.GetHoursMinutesString());
 
-        var request = MakeJiraRequest(
-            _jiraBaseUri,
-            HttpMethod.Post,
-            $"issue/{issueKey}/worklog?adjustEstimate=leave&notifyUsers=true"); 
+        var uri = $"issue/{issueKey}/worklog?adjustEstimate=leave&notifyUsers=true";
+        var request = MakeJiraRequest(_jiraBaseUri, HttpMethod.Post, uri);
         request.Content = JsonContent.Create(new
         {
             comment = worklogDescription ?? $"Working on issue {issueKey}",
@@ -61,7 +61,38 @@ public class JiraClient
             timeSpentSeconds = (int)timeSpent.TotalSeconds
         });
         var response = await _httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorMessage = await GetJsonErrorMessage(response);
+            var status = (int)response.StatusCode;
+            throw new JiraException($"POST {uri} returned HTTP {status} {response.ReasonPhrase}. {errorMessage}");
+        }
+    }
+
+    private async Task<string> GetJsonErrorMessage(HttpResponseMessage response)
+    {
+        var input = "(error reading response)";
+        try
+        {
+            input = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrEmpty(input)) return "Body: (empty)";
+            var json = JsonSerializer.Deserialize<dynamic>(input);
+
+            JsonElement errors = json?.GetProperty("errorMessages");
+            var arrayLength = errors.GetArrayLength();
+            if (arrayLength >= 1)
+            {
+                var errorMessage = errors.EnumerateArray().First().ToString();
+                if (!string.IsNullOrEmpty(errorMessage)) return errorMessage;
+            }
+        }
+        // ReSharper disable once EmptyGeneralCatchClause
+        catch (Exception ex)
+        {
+            _console.Output.WriteLine(ex.Message);
+        }
+
+        return $"Body: {input}";
     }
 
     private HttpRequestMessage MakeJiraRequest(Uri jiraBaseUri, HttpMethod method, string relativeUri)
@@ -75,7 +106,7 @@ public class JiraClient
                 Authorization = new AuthenticationHeaderValue(
                     "Basic",
                     Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_userName}:{_apiKey}"))),
-                Accept = {new MediaTypeWithQualityHeaderValue("application/json")}
+                Accept = { new MediaTypeWithQualityHeaderValue("application/json") }
             }
         };
         return request;
