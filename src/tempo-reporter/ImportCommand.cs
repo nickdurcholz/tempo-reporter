@@ -95,7 +95,11 @@ public class ImportCommand : BaseTempoCommand, ICommand
 
         foreach (var row in unmatched)
             importList.Add(new ImportItem(row, null));
-        importList.Sort((a, b) => a.Row.Date.CompareTo(b.Row.Date));
+        importList.Sort((a, b) =>
+        {
+            var d = a.Row.Date.CompareTo(b.Row.Date);
+            return d == 0 ? string.CompareOrdinal(a.Row.IssueKey, b.Row.IssueKey) : d;
+        });
         return importList;
     }
 
