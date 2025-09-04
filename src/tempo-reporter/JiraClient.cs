@@ -18,7 +18,7 @@ public class JiraClient
 
     public JiraClient(string jiraDomain, string userName, string apiKey, IConsole console)
     {
-        _jiraBaseUri = new Uri($"https://{jiraDomain}/rest/api/2/");
+        _jiraBaseUri = new Uri($"https://{jiraDomain}/rest/api/3/");
         _userName = userName;
         _apiKey = apiKey;
         _console = console;
@@ -31,7 +31,7 @@ public class JiraClient
         var request = MakeJiraRequest(
             _jiraBaseUri,
             HttpMethod.Get,
-            $"search?maxResults={pageSize}&fields=id,key&jql={UrlEncoder.Default.Encode(keysJql)}");
+            $"search/jql?maxResults={pageSize}&fields=id,key&jql={UrlEncoder.Default.Encode(keysJql)}");
         var response = await _httpClient.SendAsync(request);
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<IssueSearchResult>() ??
@@ -52,7 +52,7 @@ public class JiraClient
             worklogDateTime,
             timeSpent.GetHoursMinutesString());
 
-        var uri = $"issue/{issueKey}/worklog?adjustEstimate=leave&notifyUsers=true";
+        var uri = $"issue/{issueKey}/worklog?adjustEstimate=leave&notifyUsers=false";
         var request = MakeJiraRequest(_jiraBaseUri, HttpMethod.Post, uri);
         request.Content = JsonContent.Create(new
         {
@@ -86,10 +86,9 @@ public class JiraClient
                 if (!string.IsNullOrEmpty(errorMessage)) return errorMessage;
             }
         }
-        // ReSharper disable once EmptyGeneralCatchClause
         catch (Exception ex)
         {
-            _console.Output.WriteLine(ex.Message);
+            await _console.Output.WriteLineAsync(ex.Message);
         }
 
         return $"Body: {input}";
