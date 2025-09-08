@@ -56,7 +56,22 @@ public class JiraClient
         var request = MakeJiraRequest(_jiraBaseUri, HttpMethod.Post, uri);
         request.Content = JsonContent.Create(new
         {
-            comment = worklogDescription ?? $"Working on issue {issueKey}",
+            comment = new
+            {
+                type = "doc",
+                version = 1,
+                content = new[]
+                {
+                    new
+                    {
+                        content = new[]
+                        {
+                            new {text = worklogDescription ?? $"Working on issue {issueKey}", type = "text"},
+                        },
+                        type = "paragraph",
+                    }
+                },
+            },
             started = $"{worklogDateTime:yyyy-MM-ddTHH:mm:ss.fff}+0000",
             timeSpentSeconds = (int)timeSpent.TotalSeconds
         });
