@@ -5,15 +5,14 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Encodings.Web;
 using CliFx;
-using CliFx.Attributes;
-using CliFx.Exceptions;
+using CliFx.Binding;
 using CliFx.Infrastructure;
 using CsvHelper;
 using tempo_reporter;
 using TimeSpanParserUtil;
 
 [Command("import", Description = "Replaces all tempo worklogs for a given day with data contained in CSV read from stdin.")]
-public class ImportCommand : BaseTempoCommand, ICommand
+public partial class ImportCommand : BaseTempoCommand, ICommand
 {
     public static readonly HttpClient Client = new();
     private JiraClient? _jiraclient;
@@ -28,32 +27,24 @@ public class ImportCommand : BaseTempoCommand, ICommand
         "jira-token",
         Description =
             "Jira api token. See https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#authentication",
-        EnvironmentVariable = "JIRA_TOKEN",
-        IsRequired = true)]
-    public string? JiraApiToken { get; set; }
+        EnvironmentVariable = "JIRA_TOKEN")]
+    public required string JiraApiToken { get; set; }
 
     [CommandOption(
         "jira-user",
         Description =
             "Jira user name. See https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#authentication",
-        EnvironmentVariable = "JIRA_USER",
-        IsRequired = true)]
-    public string? JiraUser { get; set; }
+        EnvironmentVariable = "JIRA_USER")]
+    public required string JiraUser { get; set; }
 
     [CommandOption(
         "jira-domain",
         Description = "Domain name of your jira cloud instance. E.g my-jira.atlassian.net",
-        EnvironmentVariable = "JIRA_DOMAIN",
-        IsRequired = true)]
-    public string? JiraDomain { get; set; }
+        EnvironmentVariable = "JIRA_DOMAIN")]
+    public required string JiraDomain { get; set; }
 
     public async ValueTask ExecuteAsync(IConsole console)
     {
-        ArgumentException.ThrowIfNullOrEmpty(TempoApiToken);
-        ArgumentException.ThrowIfNullOrEmpty(JiraApiToken);
-        ArgumentException.ThrowIfNullOrEmpty(JiraUser);
-        ArgumentException.ThrowIfNullOrEmpty(JiraDomain);
-
         _jiraclient = new JiraClient(JiraDomain, JiraUser, JiraApiToken, console);
 
         var input = OpenInputFile(console);

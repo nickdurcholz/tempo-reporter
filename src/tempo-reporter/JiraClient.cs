@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using CliFx.Exceptions;
+using CliFx;
 using CliFx.Infrastructure;
 
 namespace tempo_reporter;

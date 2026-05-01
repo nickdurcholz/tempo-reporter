@@ -1,3 +1,3 @@
 ﻿using CliFx;
 
-return await new CliApplicationBuilder().AddCommandsFromThisAssembly().Build().RunAsync();
+return await new CommandLineApplicationBuilder().AddCommandsFromThisAssembly().Build().RunAsync();

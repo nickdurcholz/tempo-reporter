@@ -1,6 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using CliFx.Attributes;
+using CliFx.Binding;
 using CliFx.Infrastructure;
 
 namespace tempo_reporter;
@@ -12,10 +12,9 @@ public class BaseTempoCommand
     [CommandOption(
         "tempo-token",
         Description = "Tempo api token. See https://apidocs.tempo.io/#section/Authentication",
-        EnvironmentVariable = "TEMPO_TOKEN",
-        IsRequired = true)]
+        EnvironmentVariable = "TEMPO_TOKEN")]
 #pragma warning disable CliFx_OptionMustBeInsideCommand
-    public string? TempoApiToken { get; set; }
+    public required string TempoApiToken { get; set; }
 #pragma warning restore CliFx_OptionMustBeInsideCommand
 
     protected async IAsyncEnumerable<TempoWorklogsResult.WorklogResult> GetWorklogs(IEnumerable<DateOnly> dates)
