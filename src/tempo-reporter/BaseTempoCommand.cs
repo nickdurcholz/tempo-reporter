@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using CliFx.Binding;
@@ -49,6 +50,32 @@ public class BaseTempoCommand
         var request = MakeTempoRequest(HttpMethod.Delete, $"worklogs/{worklog.TempoWorklogId}");
         var response = await ImportCommand.Client.SendAsync(request);
         response.EnsureSuccessStatusCode();
+    }
+
+    protected async Task<string?> GetTempoAccountCategoryType(int accountId)
+    {
+        var request = MakeTempoRequest(HttpMethod.Get, $"accounts/{accountId}");
+        var response = await ImportCommand.Client.SendAsync(request);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+
+        var account = await response.Content.ReadFromJsonAsync<TempoAccount>();
+        return account?.Category?.Type?.Name;
+    }
+
+    private class TempoAccount
+    {
+        public TempoAccountCategory? Category { get; set; }
+    }
+
+    private class TempoAccountCategory
+    {
+        public TempoAccountCategoryType? Type { get; set; }
+    }
+
+    private class TempoAccountCategoryType
+    {
+        public string? Name { get; set; }
     }
 
     protected HttpRequestMessage MakeTempoRequest(HttpMethod httpMethod, string? relativeUri)

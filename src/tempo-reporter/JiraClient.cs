@@ -15,6 +15,7 @@ public class JiraClient
     private readonly IConsole _console;
     private readonly Uri _jiraBaseUri;
     private readonly string _userName;
+    private string? _accountFieldId;
 
     public JiraClient(string jiraDomain, string userName, string apiKey, IConsole console)
     {
@@ -22,6 +23,90 @@ public class JiraClient
         _userName = userName;
         _apiKey = apiKey;
         _console = console;
+    }
+
+    public async Task<string> DiscoverAccountFieldId()
+    {
+        if (_accountFieldId != null) return _accountFieldId;
+
+        var request = MakeJiraRequest(_jiraBaseUri, HttpMethod.Get, "field");
+        var response = await _httpClient.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorMessage = await GetJsonErrorMessage(response);
+            throw new JiraException($"GET field returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}. {errorMessage}");
+        }
+
+        var fields = await response.Content.ReadFromJsonAsync<JiraField[]>() ??
+                     throw new InvalidOperationException("Jira field listing returned a null response");
+
+        var matches = fields.Where(f => string.Equals(f.Name, "Account", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0)
+            throw new CommandException("No Jira field named 'Account' was found. The --capex/--opex options require a Tempo Account custom field on issues.");
+
+        if (matches.Count > 1)
+        {
+            var tempoMatches = matches
+                .Where(f => f.Schema?.Custom != null && f.Schema.Custom.Contains("tempo", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (tempoMatches.Count == 0)
+                throw new CommandException($"Multiple Jira fields named 'Account' were found ({string.Join(", ", matches.Select(m => m.Id))}) but none appear to be a Tempo account custom field.");
+            if (tempoMatches.Count > 1)
+                throw new CommandException($"Multiple Tempo-style 'Account' fields were found ({string.Join(", ", tempoMatches.Select(m => m.Id))}). Cannot disambiguate.");
+            matches = tempoMatches;
+        }
+
+        _accountFieldId = matches[0].Id;
+        return _accountFieldId;
+    }
+
+    public async Task<Dictionary<string, int?>> GetIssueAccountIds(IEnumerable<string> issueKeys)
+    {
+        var keys = issueKeys.Distinct().ToList();
+        var result = keys.ToDictionary(k => k, _ => (int?)null);
+        if (keys.Count == 0) return result;
+
+        var accountFieldId = await DiscoverAccountFieldId();
+
+        const int pageSize = 500;
+        var keysJql = $"key in ('{string.Join("', '", keys)}')";
+        var request = MakeJiraRequest(
+            _jiraBaseUri,
+            HttpMethod.Get,
+            $"search/jql?maxResults={pageSize}&fields=key,{accountFieldId}&jql={UrlEncoder.Default.Encode(keysJql)}");
+        var response = await _httpClient.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        var search = await response.Content.ReadFromJsonAsync<IssueSearchResult>() ??
+                     throw new InvalidOperationException("Jira issue search returned a null response");
+        if (search.Total > pageSize)
+            throw new CommandException($"The jira search returned more than the maximum allowed results: {pageSize}");
+        if (search.Issues == null) return result;
+
+        foreach (var issue in search.Issues)
+        {
+            if (issue.Fields == null) continue;
+            if (!issue.Fields.TryGetValue(accountFieldId, out var accountValue)) continue;
+            if (accountValue.ValueKind != JsonValueKind.Object) continue;
+            if (!accountValue.TryGetProperty("id", out var idProp)) continue;
+            if (idProp.ValueKind == JsonValueKind.Number && idProp.TryGetInt32(out var id))
+                result[issue.Key] = id;
+            else if (idProp.ValueKind == JsonValueKind.String && int.TryParse(idProp.GetString(), out var sid))
+                result[issue.Key] = sid;
+        }
+
+        return result;
+    }
+
+    private class JiraField
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public JiraFieldSchema? Schema { get; set; }
+    }
+
+    private class JiraFieldSchema
+    {
+        public string? Custom { get; set; }
     }
 
     public async Task<List<JiraIssueIdentifiers>> GetIssueIdMap(IEnumerable<string> keys)

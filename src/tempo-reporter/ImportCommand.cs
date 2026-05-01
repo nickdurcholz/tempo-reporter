@@ -43,6 +43,21 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
         EnvironmentVariable = "JIRA_DOMAIN")]
     public required string JiraDomain { get; set; }
 
+    [CommandOption(
+        "capex",
+        Description = "If a CSV row's issue is linked to a Tempo account whose category type is CAPITALIZED, log the row to this work item key instead.")]
+    public string? CapexTarget { get; set; }
+
+    [CommandOption(
+        "opex",
+        Description = "If a CSV row's issue is linked to a Tempo account whose category type is OPERATIONAL, log the row to this work item key instead.")]
+    public string? OpexTarget { get; set; }
+
+    [CommandOption(
+        "squash",
+        Description = "Before logging hours, collapse rows sharing (Date, IssueKey): sum the time and join descriptions with newlines.")]
+    public bool Squash { get; set; }
+
     public async ValueTask ExecuteAsync(IConsole console)
     {
         _jiraclient = new JiraClient(JiraDomain, JiraUser, JiraApiToken, console);
@@ -50,14 +65,84 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
         var input = OpenInputFile(console);
         var data = ParseCsv(input, console);
 
+        if (CapexTarget != null || OpexTarget != null)
+            await RedirectByAccountCategory(data, console);
+
+        if (Squash)
+            data = SquashByDateAndIssue(data);
+
         var importList = await MatchImportRowsToExistingWorkItems(console, data);
 
         var startTimes = new Dictionary<DateOnly, TimeOnly>();
-        foreach (var item in importList) 
+        foreach (var item in importList)
             await ImportCsvRow(item, startTimes, console);
 
         if (input != console.Input)
             input.Dispose();
+    }
+
+    private async Task RedirectByAccountCategory(List<CsvRow> rows, IConsole console)
+    {
+        Debug.Assert(_jiraclient != null, nameof(_jiraclient) + " != null");
+
+        var distinctKeys = rows.Select(r => r.IssueKey).Distinct().ToList();
+        var issueAccounts = await _jiraclient.GetIssueAccountIds(distinctKeys);
+
+        var distinctAccountIds = issueAccounts.Values.Where(v => v != null).Select(v => v!.Value).Distinct().ToList();
+        var accountTypes = new Dictionary<int, string?>();
+        foreach (var accountId in distinctAccountIds)
+            accountTypes[accountId] = await GetTempoAccountCategoryType(accountId);
+
+        foreach (var row in rows)
+        {
+            if (!issueAccounts.TryGetValue(row.IssueKey, out var accountId) || accountId == null) continue;
+            if (!accountTypes.TryGetValue(accountId.Value, out var typeName) || typeName == null) continue;
+
+            string? target = null;
+            if (string.Equals(typeName, "CAPITALIZED", StringComparison.OrdinalIgnoreCase))
+                target = CapexTarget;
+            else if (string.Equals(typeName, "OPERATIONAL", StringComparison.OrdinalIgnoreCase))
+                target = OpexTarget;
+
+            if (target == null || target == row.IssueKey) continue;
+
+            console.Output.WriteLine($"Redirecting {row.IssueKey} ({typeName} account #{accountId}) to {target} on {row.Date:yyyy-MM-dd}");
+            row.IssueKey = target;
+        }
+    }
+
+    private static List<CsvRow> SquashByDateAndIssue(List<CsvRow> rows)
+    {
+        var groups = new Dictionary<(DateOnly, string), CsvRow>();
+        var ordered = new List<CsvRow>(rows.Count);
+        var descriptions = new Dictionary<(DateOnly, string), List<string>>();
+
+        foreach (var row in rows)
+        {
+            var key = (row.Date, row.IssueKey);
+            if (!groups.TryGetValue(key, out var existing))
+            {
+                existing = new CsvRow {Date = row.Date, IssueKey = row.IssueKey, Time = row.Time, Description = null};
+                groups[key] = existing;
+                descriptions[key] = new List<string>();
+                ordered.Add(existing);
+            }
+            else
+            {
+                existing.Time = existing.Time.Add(row.Time);
+            }
+
+            if (!string.IsNullOrEmpty(row.Description))
+                descriptions[key].Add(row.Description);
+        }
+
+        foreach (var (key, row) in groups)
+        {
+            var lines = descriptions[key];
+            row.Description = lines.Count > 0 ? string.Join("\n", lines) : null;
+        }
+
+        return ordered;
     }
 
     private async Task<List<ImportItem>> MatchImportRowsToExistingWorkItems(IConsole console, List<CsvRow> data)
@@ -158,7 +243,7 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
             {
                 if (double.TryParse(time, out var d))
                 {
-                    t = TimeSpan.FromSeconds(d);
+                    t = TimeSpan.FromHours(d);
                 }
                 else
                 {
