@@ -115,7 +115,7 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
     {
         var groups = new Dictionary<(DateOnly, string), CsvRow>();
         var ordered = new List<CsvRow>(rows.Count);
-        var descriptions = new Dictionary<(DateOnly, string), List<string>>();
+        var descriptions = new Dictionary<(DateOnly, string), List<(string Description, TimeSpan Time)>>();
 
         foreach (var row in rows)
         {
@@ -124,7 +124,7 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
             {
                 existing = new CsvRow {Date = row.Date, IssueKey = row.IssueKey, Time = row.Time, Description = null};
                 groups[key] = existing;
-                descriptions[key] = new List<string>();
+                descriptions[key] = new List<(string, TimeSpan)>();
                 ordered.Add(existing);
             }
             else
@@ -133,13 +133,15 @@ public partial class ImportCommand : BaseTempoCommand, ICommand
             }
 
             if (!string.IsNullOrEmpty(row.Description))
-                descriptions[key].Add(row.Description);
+                descriptions[key].Add((row.Description, row.Time));
         }
 
         foreach (var (key, row) in groups)
         {
             var lines = descriptions[key];
-            row.Description = lines.Count > 0 ? string.Join("\n", lines) : null;
+            row.Description = lines.Count > 0
+                ? string.Join("\n", lines.Select(l => $"{l.Description} {l.Time.GetHoursMinutesString()}"))
+                : null;
         }
 
         return ordered;
